@@ -1,0 +1,12 @@
+name: ubs-mcp-poc
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - mcp[cli]
+    - openai
+    - openai-agents
+    - python-dotenv 
