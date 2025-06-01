@@ -62,14 +62,170 @@ The main Streamlit application that acts as the MCP host:
   - Context aggregation across multiple servers
 
 #### 2. **MCP Client Layer** (`src/mcp/client.py`)
-Individual clients that maintain isolated server connections:
-- **Architecture**: Each client maintains a 1:1 stateful session with one server
-- **Capabilities**: 
-  - Protocol negotiation and capability exchange
-  - Bidirectional message routing
-  - Tool discovery and execution
-  - Subscription and notification management
-  - Security boundary enforcement
+
+**🔗 Core Responsibility: One Client ↔ One Server Communication**
+
+Each `MCPClient` manages a single connection to one MCP server, following the official 1:1 relationship pattern.
+
+##### **🏗️ Basic Architecture Flow**
+
+```mermaid
+sequenceDiagram
+    participant App as ChatBot App
+    participant Client as MCPClient
+    participant Server as MCP Server
+    
+    App->>Client: Initialize connection
+    Client->>Server: STDIO connection + handshake
+    Server-->>Client: Capabilities + available tools
+    Client-->>App: Ready with tool list
+    
+    App->>Client: Execute tool("read_file", {path: "..."})
+    Client->>Server: MCP tools/call message
+    Server-->>Client: Tool result
+    Client-->>App: Formatted result
+```
+
+##### **💡 Core Implementation Logic**
+
+**Step 1: Connection Setup**
+```python
+class MCPClient:
+    async def initialize(self):
+        # 1. Start server process (python/node/npx command)
+        server_process = start_server_process(self.config)
+        
+        # 2. Connect via STDIO (stdin/stdout communication)
+        stdio_transport = connect_stdio(server_process)
+        
+        # 3. MCP handshake - exchange protocol versions
+        session = ClientSession(stdio_transport)
+        await session.initialize()  # ← MCP protocol negotiation
+        
+        # 4. Discover what tools this server provides
+        tools_response = await session.list_tools()
+        self.available_tools = parse_tools(tools_response)
+```
+
+**Step 2: Tool Execution**
+```python
+async def execute_tool(self, tool_name, arguments):
+    # Validate tool exists
+    if tool_name not in self.available_tools:
+        raise ValueError(f"Tool {tool_name} not available")
+    
+    # Execute with retry logic
+    for attempt in range(retries):
+        try:
+            # Send MCP tools/call request
+            result = await self.session.call_tool(tool_name, arguments)
+            return result
+        except Exception as e:
+            if attempt < retries - 1:
+                await asyncio.sleep(backoff_delay)  # Retry with backoff
+            else:
+                raise e
+```
+
+##### **🎯 Key MCP Concepts in Action**
+
+**Tool Discovery Pattern**
+```python
+# Each client discovers its server's tools independently
+async def discover_tools(self):
+    """What can this specific server do?"""
+    response = await self.session.list_tools()
+    
+    # Example response processing:
+    # [{name: "read_file", description: "...", schema: {...}},
+    #  {name: "write_file", description: "...", schema: {...}}]
+    
+    self.tools = [MCPTool(name=t.name, 
+                         description=t.description,
+                         schema=t.inputSchema) 
+                 for t in response.tools]
+```
+
+**Resource Management Pattern**
+```python
+# Clean startup/shutdown lifecycle
+async def __aenter__(self):
+    await self.initialize()
+    return self
+
+async def __aexit__(self, exc_type, exc_val, exc_tb):
+    await self.cleanup()  # Always cleanup server processes
+
+# Usage:
+async with MCPClient("filesystem", config) as client:
+    tools = await client.list_tools()
+    result = await client.execute_tool("read_file", {"path": "/etc/hosts"})
+    # Auto-cleanup happens here
+```
+
+##### **🔄 Multi-Client Orchestration**
+
+**How Multiple Clients Work Together**
+```python
+# In ChatSession - the orchestrator
+class ChatSession:
+    def __init__(self, clients: List[MCPClient]):
+        self.clients = clients  # e.g., [filesystem_client, datetime_client, web_client]
+        self.tool_routing = {}  # tool_name -> which_client
+    
+    async def initialize(self):
+        # 1. Initialize each client separately
+        for client in self.clients:
+            await client.initialize()
+            
+            # 2. Build unified tool map
+            for tool in await client.list_tools():
+                self.tool_routing[tool.name] = client
+        
+        # Result: {"read_file": filesystem_client, 
+        #          "get_time": datetime_client,
+        #          "web_search": web_client}
+    
+    async def execute_any_tool(self, tool_name, args):
+        # Route to correct client automatically
+        client = self.tool_routing[tool_name]
+        return await client.execute_tool(tool_name, args)
+```
+
+##### **🛠️ Real Usage Example**
+
+```python
+# Complete flow from user query to tool execution
+async def handle_user_request():
+    # Setup: Multiple servers for different capabilities
+    config = {
+        "filesystem": {"command": "npx", "args": ["@modelcontextprotocol/server-filesystem"]},
+        "datetime": {"command": "python", "args": ["src/servers/datetime.py"]},
+    }
+    
+    # Create clients (one per server)
+    fs_client = MCPClient("filesystem", config["filesystem"])
+    dt_client = MCPClient("datetime", config["datetime"])
+    
+    # Initialize connections
+    await fs_client.initialize()  # ← Connects to filesystem server
+    await dt_client.initialize()  # ← Connects to datetime server
+    
+    # Now we have access to all tools from both servers
+    fs_tools = await fs_client.list_tools()    # ["read_file", "write_file", "list_dir"]
+    dt_tools = await dt_client.list_tools()    # ["get_time", "format_date"]
+    
+    # Execute tools through appropriate clients
+    files = await fs_client.execute_tool("list_dir", {"path": "/home"})
+    time = await dt_client.execute_tool("get_time", {"timezone": "UTC"})
+```
+
+**Why This Architecture?**
+- ✅ **Isolation**: Each server runs independently, can't interfere with others
+- ✅ **Composability**: Add/remove servers without affecting others  
+- ✅ **Security**: Each server has its own permissions and scope
+- ✅ **Reliability**: If one server fails, others keep working
+- ✅ **Scalability**: Easy to add new capabilities by adding new servers
 
 #### 3. **Chat Session Orchestrator** (`src/mcp/session.py`)
 The intelligent session manager that coordinates between users, LLMs, and tools:
@@ -367,14 +523,3 @@ Following [MCP security best practices](mcp-docs/sections/security-best-practice
        if provider == "new_provider":
            return NewProviderClient()
    ```
-
-## 📚 Next Steps
-
-In the following messages, we'll dive deeper into:
-
-1. **Detailed component documentation**
-2. **Advanced MCP concepts and implementation details**
-3. **Tool development guides**
-4. **Performance optimization strategies**
-5. **Troubleshooting and debugging**
-6. **Extending the architecture**
