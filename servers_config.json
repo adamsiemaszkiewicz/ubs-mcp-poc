@@ -1,0 +1,16 @@
+{
+    "mcpServers": {
+        "markdown_processor": {
+            "command": "python",
+            "args": [
+                "src/mcp/servers/markdown_processor.py"
+            ]
+        },
+        "datetime_processor": {
+            "command": "python",
+            "args": [
+                "src/mcp/servers/datetime_processor.py"
+            ]
+        }
+    }
+}
