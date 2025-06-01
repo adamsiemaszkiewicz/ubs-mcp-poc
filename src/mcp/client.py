@@ -3,7 +3,7 @@ import logging
 import os
 import shutil
 from contextlib import AsyncExitStack
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -16,20 +16,28 @@ class MCPTool:
     each tool has a unique name, description, and input schema that defines
     expected parameters using JSON Schema.
 
-    Attributes:
-        name: Unique identifier for the tool
-        description: Human-readable description of functionality
-        input_schema: JSON Schema defining expected parameters
+    Attributes
+    ----------
+    name : str
+        Unique identifier for the tool
+    description : str
+        Human-readable description of functionality
+    input_schema : dict[str, Any]
+        JSON Schema defining expected parameters
 
     """
 
     def __init__(self, name: str, description: str, input_schema: dict[str, Any]) -> None:
         """Initialize MCPTool with required properties.
 
-        Args:
-            name: Unique tool identifier (must be unique across all connected servers)
-            description: Human-readable description for the LLM to understand tool purpose
-            input_schema: JSON Schema object defining tool parameters and types
+        Parameters
+        ----------
+        name : str
+            Unique tool identifier (must be unique across all connected servers)
+        description : str
+            Human-readable description for the LLM to understand tool purpose
+        input_schema : dict[str, Any]
+            JSON Schema object defining tool parameters and types
 
         """
         self.name: str = name
@@ -44,7 +52,9 @@ class MCPTool:
         - What parameters it accepts (from schema properties)
         - Which parameters are required vs optional
 
-        Returns:
+        Returns
+        -------
+        str
             A formatted string describing the tool for LLM prompt inclusion.
 
         """
@@ -87,9 +97,12 @@ class MCPClient:
     def __init__(self, name: str, config: dict[str, Any]) -> None:
         """Initialize MCP Client for a specific server.
 
-        Args:
-            name: Unique name for this client/server connection
-            config: Server configuration containing:
+        Parameters
+        ----------
+        name : str
+            Unique name for this client/server connection
+        config : dict[str, Any]
+            Server configuration containing:
                 - command: Executable command (e.g., "python", "node", "npx")
                 - args: Command line arguments for the server
                 - env: Optional environment variables for the server process
@@ -108,8 +121,8 @@ class MCPClient:
         self.exit_stack: AsyncExitStack = AsyncExitStack()
 
         # Capability tracking (per MCP capability negotiation)
-        self._server_capabilities: Optional[Dict[str, Any]] = None
-        self._available_tools: List[MCPTool] = []
+        self._server_capabilities: Optional[dict[str, Any]] = None
+        self._available_tools: list[MCPTool] = []
 
     async def initialize(self) -> None:
         """Initialize the MCP server connection with capability negotiation.
@@ -121,10 +134,14 @@ class MCPClient:
         4. Negotiate capabilities between client and server
         5. Discover available tools
 
-        Raises:
-            ValueError: If server command is invalid or not found
-            RuntimeError: If connection or initialization fails
-            Exception: For any other initialization errors
+        Raises
+        ------
+        ValueError
+            If server command is invalid or not found
+        RuntimeError
+            If connection or initialization fails
+        Exception
+            For any other initialization errors
 
         """
         if self._is_initialized:
@@ -180,8 +197,10 @@ class MCPClient:
         - Processes tool definitions with names, descriptions, and schemas
         - Caches tools for efficient access
 
-        Raises:
-            RuntimeError: If session is not initialized
+        Raises
+        ------
+        RuntimeError
+            If session is not initialized
 
         """
         if not self.session:
@@ -208,17 +227,21 @@ class MCPClient:
             logging.error(f"Error discovering tools from {self.name}: {e}")
             raise
 
-    async def list_tools(self) -> List[MCPTool]:
+    async def list_tools(self) -> list[MCPTool]:
         """Get list of available tools from the server.
 
         Returns cached tool list from initialization. Tools are discovered
         during the initialization phase to avoid repeated server calls.
 
-        Returns:
+        Returns
+        -------
+        list[MCPTool]
             List of MCPTool objects with tool metadata
 
-        Raises:
-            RuntimeError: If the server is not initialized
+        Raises
+        ------
+        RuntimeError
+            If the server is not initialized
 
         """
         if not self._is_initialized or not self.session:
@@ -241,19 +264,30 @@ class MCPClient:
         - Implements exponential backoff for retry attempts
         - Validates tool existence before execution
 
-        Args:
-            tool_name: Name of the tool to execute (must exist on this server)
-            arguments: Tool arguments matching the tool's input schema
-            retries: Number of retry attempts for failed executions
-            delay: Initial delay between retries (exponential backoff)
+        Parameters
+        ----------
+        tool_name : str
+            Name of the tool to execute (must exist on this server)
+        arguments : dict[str, Any]
+            Tool arguments matching the tool's input schema
+        retries : int, optional
+            Number of retry attempts for failed executions, by default 2
+        delay : float, optional
+            Initial delay between retries (exponential backoff), by default 1.0
 
-        Returns:
+        Returns
+        -------
+        Any
             Tool execution result from the server
 
-        Raises:
-            RuntimeError: If server is not initialized
-            ValueError: If tool doesn't exist on this server
-            Exception: If tool execution fails after all retries
+        Raises
+        ------
+        RuntimeError
+            If server is not initialized
+        ValueError
+            If tool doesn't exist on this server
+        Exception
+            If tool execution fails after all retries
 
         """
         if not self._is_initialized or not self.session:
@@ -297,13 +331,15 @@ class MCPClient:
         # All retries exhausted
         raise Exception(f"Tool execution failed after {retries} attempts. Last error: {last_exception}")
 
-    async def get_server_capabilities(self) -> Optional[Dict[str, Any]]:
+    async def get_server_capabilities(self) -> Optional[dict[str, Any]]:
         """Get the server's declared capabilities.
 
         Returns the capabilities negotiated during initialization.
         Useful for checking what features the server supports.
 
-        Returns:
+        Returns
+        -------
+        Optional[dict[str, Any]]
             Dictionary of server capabilities or None if not initialized
 
         """
