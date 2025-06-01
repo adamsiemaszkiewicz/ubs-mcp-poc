@@ -3,6 +3,8 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+ROOT_DIR = Path(__file__).parents[3]
+
 # Create a Simple MCP Server
 mcp = FastMCP("Markdown Reader and Writer Tool")
 
@@ -24,7 +26,7 @@ def read_markdown_file(directory_path: str) -> str:
 
     """
     # Construct the file paths
-    file_paths = list(Path(directory_path).glob("*.md"))
+    file_paths = list((ROOT_DIR / directory_path).glob("*.md"))
 
     # Check if the files exist
     if not file_paths:
@@ -69,7 +71,7 @@ def write_markdown_file(directory_path: str, filename: str, content: str) -> str
         filename += ".md"
 
     # Construct the full file path
-    file_path = Path(directory_path) / filename
+    file_path = ROOT_DIR / directory_path / filename
 
     # Ensure the directory exists
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
