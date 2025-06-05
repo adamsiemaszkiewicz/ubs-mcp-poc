@@ -243,11 +243,200 @@ Pluggable LLM client architecture supporting multiple providers:
 - **Planned**: Anthropic Claude, Google Gemini
 - **Features**: Standardized interface for seamless provider switching
 
-#### 5. **MCP Server Implementations** (`src/mcp/servers/`)
-Custom MCP servers that expose domain-specific capabilities:
-- **Markdown Processor**: Text processing and markdown manipulation
-- **DateTime Processor**: Time-based operations and scheduling
-- **Filesystem**: File operations (using official MCP filesystem server)
+#### 5. **MCP Server Layer** (`src/mcp/servers/`)
+
+**🖥️ Core Responsibility: Lightweight Programs Exposing Specific Capabilities**
+
+MCP servers are standalone programs that run in separate processes and expose tools, resources, and prompts through the standardized MCP protocol.
+
+##### **🏗️ Basic Server Communication Flow**
+
+```mermaid
+sequenceDiagram
+    participant Host as Host Application
+    participant Client as MCP Client
+    participant Server as MCP Server Process
+    
+    Host->>Client: Need to call tool "read_file"
+    Client->>Server: Start process (python server.py)
+    Server-->>Client: MCP handshake + capabilities
+    Client->>Server: tools/list request
+    Server-->>Client: Available tools ["read_file", "write_file"]
+    Client->>Server: tools/call "read_file" {path: "data.txt"}
+    Server-->>Client: File contents
+    Client-->>Host: Tool result
+```
+
+##### **💡 Core Server Concepts**
+
+**Tools - Functions LLMs Can Execute**
+```python
+@mcp.tool()
+def calculate(operation: str, a: float, b: float) -> dict:
+    """Perform basic math operations"""
+    if operation == "add":
+        return {"result": a + b}
+    elif operation == "multiply":
+        return {"result": a * b}
+    else:
+        return {"error": "Unknown operation"}
+```
+
+**Resources - Data Access Points**
+```python
+# Resources are like "files" the LLM can read
+# Examples: configuration files, API data, database records
+@mcp.resource("config://settings")
+async def get_settings():
+    return {"theme": "dark", "language": "en"}
+```
+
+**Prompts - Reusable Templates** 
+```python
+# Pre-written prompts for common tasks
+@mcp.prompt("summarize_code")
+def code_summary_prompt(code: str):
+    return f"Please summarize this code and identify any issues:\n\n{code}"
+```
+
+##### **🔧 Creating a Simple Server**
+
+**Step 1: Basic Server Structure**
+```python
+# my_server.py
+from mcp.server.fastmcp import FastMCP
+
+# Initialize server
+server = FastMCP("my-calculator")
+
+@server.tool()
+def add_numbers(a: float, b: float) -> float:
+    """Add two numbers together"""
+    return a + b
+
+@server.tool() 
+def get_time() -> str:
+    """Get current time"""
+    from datetime import datetime
+    return datetime.now().isoformat()
+
+# Run server
+if __name__ == "__main__":
+    server.run()  # Starts STDIO communication
+```
+
+**Step 2: Add to Configuration**
+```json
+{
+    "mcpServers": {
+        "calculator": {
+            "command": "python",
+            "args": ["my_server.py"]
+        }
+    }
+}
+```
+
+**Step 3: Server Automatically Available**
+```python
+# Host application automatically discovers tools:
+# - add_numbers(a, b) 
+# - get_time()
+# 
+# LLM can now use these tools in conversations
+```
+
+##### **🛠️ Server Development Patterns**
+
+**Error Handling Best Practice**
+```python
+@server.tool()
+def safe_file_read(filename: str) -> dict:
+    """Read file with error handling"""
+    try:
+        # Validate input
+        if not filename.endswith('.txt'):
+            return {"error": "Only .txt files allowed"}
+        
+        # Perform operation  
+        with open(filename, 'r') as f:
+            content = f.read()
+        
+        return {"success": True, "content": content}
+        
+    except FileNotFoundError:
+        return {"error": f"File {filename} not found"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {str(e)}"}
+```
+
+**Async Operations**
+```python
+@server.tool()
+async def fetch_data(url: str) -> dict:
+    """Fetch data from external API"""
+    import httpx
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, timeout=10.0)
+            return {"data": response.json(), "status": response.status_code}
+        except Exception as e:
+            return {"error": str(e)}
+```
+
+##### **🔄 Server Lifecycle in Host**
+
+**How Servers Integrate**
+```python
+# Host application startup process:
+async def initialize_mcp_ecosystem():
+    servers = {}
+    
+    # 1. Read server configuration
+    config = load_servers_config()
+    
+    # 2. Start each server process
+    for name, server_config in config.items():
+        # Start: python my_server.py  
+        process = start_server_process(server_config)
+        
+        # 3. MCP handshake via STDIO
+        client = MCPClient(name, process)
+        await client.initialize()
+        
+        # 4. Discover available tools
+        tools = await client.list_tools()
+        
+        servers[name] = {
+            "client": client,
+            "tools": tools  # ["add_numbers", "get_time"]
+        }
+    
+    return servers  # Ready for LLM to use!
+```
+
+**Tool Routing**
+```python
+# When LLM wants to call a tool:
+async def execute_tool(tool_name: str, arguments: dict):
+    # 1. Find which server has this tool
+    for server_name, server_info in servers.items():
+        if tool_name in [t.name for t in server_info["tools"]]:
+            # 2. Route to correct server
+            client = server_info["client"]
+            result = await client.execute_tool(tool_name, arguments)
+            return result
+    
+    raise ValueError(f"Tool {tool_name} not found")
+```
+
+**Why This Architecture?**
+- ✅ **Isolation**: Each server runs separately, failures don't cascade
+- ✅ **Language Flexibility**: Write servers in Python, Node.js, Go, etc.
+- ✅ **Simple Protocol**: Just JSON over STDIO - easy to implement
+- ✅ **Auto-Discovery**: Tools automatically appear in host application
+- ✅ **Composability**: Mix different servers for different capabilities
 
 ### Protocol Implementation
 
@@ -477,49 +666,3 @@ Following [MCP security best practices](mcp-docs/sections/security-best-practice
 - Local data processing when possible
 - Minimal context sharing with servers
 - Secure credential management
-
-## 🛠️ Development
-
-### Adding New MCP Servers
-
-1. **Create Server Implementation**
-   ```python
-   # src/mcp/servers/my_server.py
-   class MyMCPServer:
-       async def handle_tool_call(self, name: str, args: dict):
-           # Implementation
-   ```
-
-2. **Update Configuration**
-   ```json
-   {
-     "mcpServers": {
-       "my_server": {
-         "command": "python",
-         "args": ["src/mcp/servers/my_server.py"]
-       }
-     }
-   }
-   ```
-
-3. **Register Tools**
-   - Tools are automatically discovered
-   - No client-side changes needed
-
-### Adding New LLM Providers
-
-1. **Implement Provider Interface**
-   ```python
-   # src/model/new_provider.py
-   class NewProviderClient(BaseLLMClient):
-       async def generate_response(self, messages: List[dict]) -> str:
-           # Provider-specific implementation
-   ```
-
-2. **Update Factory**
-   ```python
-   # src/model/factory.py
-   def create_llm_client(provider: str) -> BaseLLMClient:
-       if provider == "new_provider":
-           return NewProviderClient()
-   ```
