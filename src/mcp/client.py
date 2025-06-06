@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamablehttp_client
 
 
 class MCPTool:
@@ -102,17 +103,22 @@ class MCPClient:
         name : str
             Unique name for this client/server connection
         config : dict[str, Any]
-            Server configuration containing:
+            Server configuration containing either:
+            For STDIO transport:
                 - command: Executable command (e.g., "python", "node", "npx")
                 - args: Command line arguments for the server
                 - env: Optional environment variables for the server process
+            For HTTP transport:
+                - url: HTTP URL to connect to (e.g., "http://localhost:8000/mcp")
+                - headers: Optional HTTP headers
+                - timeout: Optional request timeout (default: 30s)
 
         """
         self.name: str = name
         self.config: dict[str, Any] = config
 
         # Connection state management
-        self.stdio_context: Any | None = None
+        self.transport_context: Any | None = None
         self.session: Optional[ClientSession] = None
         self._is_initialized: bool = False
 
@@ -128,7 +134,7 @@ class MCPClient:
         """Initialize the MCP server connection with capability negotiation.
 
         Following MCP lifecycle specification (mcp-docs/sections/lifecycle.md):
-        1. Establish transport connection (STDIO)
+        1. Establish transport connection (STDIO or HTTP)
         2. Create client session
         3. Perform MCP initialization handshake
         4. Negotiate capabilities between client and server
@@ -137,7 +143,7 @@ class MCPClient:
         Raises
         ------
         ValueError
-            If server command is invalid or not found
+            If server command is invalid or not found (STDIO) or URL is invalid (HTTP)
         RuntimeError
             If connection or initialization fails
         Exception
@@ -148,23 +154,42 @@ class MCPClient:
             logging.info(f"Client {self.name} already initialized")
             return
 
-        # Resolve server command (handle npx and other commands)
-        command = shutil.which("npx") if self.config["command"] == "npx" else self.config["command"]
-        if command is None:
-            raise ValueError(f"Server command '{self.config['command']}' not found in PATH")
-
-        # Prepare server parameters for STDIO transport
-        server_params = StdioServerParameters(
-            command=command,
-            args=self.config["args"],
-            env={**os.environ, **self.config["env"]} if self.config.get("env") else None,
-        )
-
         try:
-            # Establish STDIO transport connection
-            logging.info(f"Connecting to MCP server {self.name} via STDIO transport")
-            stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
-            read, write = stdio_transport
+            # Determine transport type based on config
+            if "url" in self.config:
+                # HTTP transport
+                url = self.config["url"]
+                headers = self.config.get("headers")
+                timeout_seconds = self.config.get("timeout", 30)
+                
+                logging.info(f"Connecting to MCP server {self.name} via HTTP transport at {url}")
+                
+                # Use streamable HTTP client
+                http_transport = await self.exit_stack.enter_async_context(
+                    streamablehttp_client(
+                        url=url,
+                        headers=headers,
+                        timeout=__import__('datetime').timedelta(seconds=timeout_seconds)
+                    )
+                )
+                read, write, get_session_id = http_transport
+                
+            else:
+                # STDIO transport (existing logic)
+                command = shutil.which("npx") if self.config["command"] == "npx" else self.config["command"]
+                if command is None:
+                    raise ValueError(f"Server command '{self.config['command']}' not found in PATH")
+
+                # Prepare server parameters for STDIO transport
+                server_params = StdioServerParameters(
+                    command=command,
+                    args=self.config["args"],
+                    env={**os.environ, **self.config["env"]} if self.config.get("env") else None,
+                )
+
+                logging.info(f"Connecting to MCP server {self.name} via STDIO transport")
+                stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
+                read, write = stdio_transport
 
             # Create and initialize MCP client session
             session = await self.exit_stack.enter_async_context(ClientSession(read, write))
@@ -366,7 +391,7 @@ class MCPClient:
 
                 # Reset state
                 self.session = None
-                self.stdio_context = None
+                self.transport_context = None
                 self._is_initialized = False
                 self._server_capabilities = None
                 self._available_tools = []
