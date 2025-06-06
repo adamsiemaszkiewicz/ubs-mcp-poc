@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo, available_timezones
 from mcp.server.fastmcp import FastMCP
 
 # Create a DateTime MCP Server
-mcp = FastMCP("DateTime Operations Tool")
+mcp = FastMCP("DateTime Operations Tool", port=8001)
 
 
 @mcp.tool()
@@ -119,5 +119,5 @@ def list_timezones(search_term: Optional[str] = None) -> str:
 
 
 if __name__ == "__main__":
-    # Initialize and run the server
-    mcp.run()
+    # Initialize and run the server using HTTP transport
+    mcp.run(transport="streamable-http")

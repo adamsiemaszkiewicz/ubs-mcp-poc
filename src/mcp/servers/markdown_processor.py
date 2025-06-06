@@ -5,8 +5,8 @@ from mcp.server.fastmcp import FastMCP
 
 ROOT_DIR = Path(__file__).parents[3]
 
-# Create a Simple MCP Server
-mcp = FastMCP("Markdown Reader and Writer Tool")
+# Create a Simple MCP Server  
+mcp = FastMCP("Markdown Reader and Writer Tool", port=8000)
 
 
 @mcp.tool()
@@ -90,5 +90,5 @@ def write_markdown_file(directory_path: str, filename: str, content: str) -> str
 
 
 if __name__ == "__main__":
-    # Initialize and run the server
-    mcp.run()
+    # Initialize and run the server using HTTP transport
+    mcp.run(transport="streamable-http")
