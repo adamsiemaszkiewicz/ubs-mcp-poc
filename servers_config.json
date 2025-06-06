@@ -1,16 +1,12 @@
 {
     "mcpServers": {
         "markdown_processor": {
-            "command": "python",
-            "args": [
-                "src/mcp/servers/markdown_processor.py"
-            ]
+            "url": "http://127.0.0.1:8000/mcp",
+            "timeout": 30
         },
         "datetime_processor": {
-            "command": "python",
-            "args": [
-                "src/mcp/servers/datetime_processor.py"
-            ]
+            "url": "http://127.0.0.1:8001/mcp",
+            "timeout": 30
         },
         "filesystem": {
             "command": "npx",
