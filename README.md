@@ -65,7 +65,7 @@ The main Streamlit application that acts as the MCP host:
 
 **🔗 Core Responsibility: One Client ↔ One Server Communication**
 
-Each `MCPClient` manages a single connection to one MCP server, following the official 1:1 relationship pattern.
+Each `MCPClient` manages a single connection to one MCP server, following the official 1:1 relationship pattern. The client automatically detects and supports both **STDIO** and **HTTP** transports based on configuration.
 
 ##### **🏗️ Basic Architecture Flow**
 
@@ -76,7 +76,7 @@ sequenceDiagram
     participant Server as MCP Server
     
     App->>Client: Initialize connection
-    Client->>Server: STDIO connection + handshake
+    Client->>Server: STDIO/HTTP connection + handshake
     Server-->>Client: Capabilities + available tools
     Client-->>App: Ready with tool list
     
@@ -88,21 +88,30 @@ sequenceDiagram
 
 ##### **💡 Core Implementation Logic**
 
-**Step 1: Connection Setup**
+**Step 1: Connection Setup (Auto-Transport Detection)**
 ```python
 class MCPClient:
     async def initialize(self):
-        # 1. Start server process (python/node/npx command)
-        server_process = start_server_process(self.config)
+        # 1. Auto-detect transport type from config
+        if "url" in self.config:
+            # HTTP transport - connect to running server
+            transport = await streamablehttp_client(
+                url=self.config["url"],
+                headers=self.config.get("headers"),
+                timeout=timedelta(seconds=self.config.get("timeout", 30))
+            )
+            read, write, get_session_id = transport
+        else:
+            # STDIO transport - start server process
+            server_process = start_server_process(self.config)
+            transport = await stdio_client(server_process)
+            read, write = transport
         
-        # 2. Connect via STDIO (stdin/stdout communication)
-        stdio_transport = connect_stdio(server_process)
-        
-        # 3. MCP handshake - exchange protocol versions
-        session = ClientSession(stdio_transport)
+        # 2. MCP handshake - exchange protocol versions
+        session = ClientSession(read, write)
         await session.initialize()  # ← MCP protocol negotiation
         
-        # 4. Discover what tools this server provides
+        # 3. Discover what tools this server provides
         tools_response = await session.list_tools()
         self.available_tools = parse_tools(tools_response)
 ```
@@ -197,27 +206,32 @@ class ChatSession:
 ```python
 # Complete flow from user query to tool execution
 async def handle_user_request():
-    # Setup: Multiple servers for different capabilities
+    # Setup: Multiple servers for different capabilities (auto-transport detection)
     config = {
         "filesystem": {"command": "npx", "args": ["@modelcontextprotocol/server-filesystem"]},
-        "datetime": {"command": "python", "args": ["src/servers/datetime.py"]},
+        "datetime": {"url": "http://127.0.0.1:8001/mcp", "timeout": 30},  # HTTP server
+        "markdown": {"command": "python", "args": ["src/servers/markdown.py"]},  # STDIO server
     }
     
-    # Create clients (one per server)
-    fs_client = MCPClient("filesystem", config["filesystem"])
-    dt_client = MCPClient("datetime", config["datetime"])
+    # Create clients (one per server) - auto-detects transport type
+    fs_client = MCPClient("filesystem", config["filesystem"])  # STDIO
+    dt_client = MCPClient("datetime", config["datetime"])      # HTTP
+    md_client = MCPClient("markdown", config["markdown"])      # STDIO
     
-    # Initialize connections
-    await fs_client.initialize()  # ← Connects to filesystem server
-    await dt_client.initialize()  # ← Connects to datetime server
+    # Initialize connections (transport handled automatically)
+    await fs_client.initialize()  # ← Starts filesystem server via STDIO
+    await dt_client.initialize()  # ← Connects to HTTP datetime server
+    await md_client.initialize()  # ← Starts markdown server via STDIO
     
-    # Now we have access to all tools from both servers
+    # Now we have access to all tools from all servers
     fs_tools = await fs_client.list_tools()    # ["read_file", "write_file", "list_dir"]
     dt_tools = await dt_client.list_tools()    # ["get_time", "format_date"]
+    md_tools = await md_client.list_tools()    # ["read_markdown", "write_markdown"]
     
-    # Execute tools through appropriate clients
+    # Execute tools through appropriate clients (same API regardless of transport)
     files = await fs_client.execute_tool("list_dir", {"path": "/home"})
     time = await dt_client.execute_tool("get_time", {"timezone": "UTC"})
+    content = await md_client.execute_tool("read_markdown", {"path": "README.md"})
 ```
 
 **Why This Architecture?**
@@ -479,6 +493,7 @@ async def execute_tool(self, tool_name: str, arguments: dict) -> Any:
 - Simultaneous connections to multiple MCP servers
 - Automatic tool discovery and consolidation
 - Load balancing and failover capabilities
+- Mix STDIO and HTTP servers in the same application
 
 ### 2. **Intelligent Tool Orchestration**  
 - Automatic tool call detection from natural language
@@ -508,7 +523,9 @@ async def execute_tool(self, tool_name: str, arguments: dict) -> Any:
 ```
 ubs-mcp-poc/
 ├── chatbot.py                 # Main Streamlit application (Host)
-├── servers_config.json        # MCP server configuration
+├── servers_config.json        # MCP server configuration (STDIO & HTTP)
+├── run_http_servers.py        # Helper script to run HTTP servers
+├── example_http_usage.py      # HTTP transport examples
 ├── environment.yml           # Conda environment setup
 ├── src/
 │   ├── mcp/                  # MCP implementation
@@ -532,16 +549,19 @@ ubs-mcp-poc/
 ## ⚙️ Configuration
 
 ### MCP Server Configuration (`servers_config.json`)
+
+The configuration supports both STDIO and HTTP transports with automatic detection:
+
 ```json
 {
     "mcpServers": {
         "markdown_processor": {
-            "command": "python",
-            "args": ["src/mcp/servers/markdown_processor.py"]
+            "url": "http://127.0.0.1:8000/mcp",
+            "timeout": 30
         },
         "datetime_processor": {
-            "command": "python", 
-            "args": ["src/mcp/servers/datetime_processor.py"]
+            "url": "http://127.0.0.1:8001/mcp",
+            "timeout": 30
         },
         "filesystem": {
             "command": "npx",
@@ -550,6 +570,15 @@ ubs-mcp-poc/
     }
 }
 ```
+
+**Transport Auto-Detection:**
+- **HTTP**: Configuration contains `"url"` → connects to running HTTP server
+- **STDIO**: Configuration contains `"command"` → starts server as subprocess
+
+**HTTP Configuration Options:**
+- `url`: Server endpoint (required)
+- `headers`: Optional HTTP headers for authentication
+- `timeout`: Request timeout in seconds (default: 30)
 
 ### Environment Setup
 ```bash
@@ -563,9 +592,42 @@ pip install mcp[cli] openai-agents python-dotenv streamlit
 
 ## 🎯 Usage
 
-### Starting the Application
+### Option 1: HTTP Transport (Recommended for Production)
+
+1. **Start HTTP MCP Servers:**
+   ```bash
+   # Start all servers as persistent HTTP services
+   python run_http_servers.py
+   ```
+
+2. **Run the Chatbot:**
+   ```bash
+   streamlit run chatbot.py
+   ```
+
+### Option 2: STDIO Transport (Good for Development)
+
+1. **Update Configuration:** Change `servers_config.json` to use STDIO:
+   ```json
+   {
+       "mcpServers": {
+           "markdown_processor": {
+               "command": "python",
+               "args": ["src/mcp/servers/markdown_processor.py"]
+           }
+       }
+   }
+   ```
+
+2. **Run the Chatbot:**
+   ```bash
+   streamlit run chatbot.py
+   ```
+
+### Testing HTTP Transport
 ```bash
-streamlit run chatbot.py
+# Test HTTP transport functionality
+python example_http_usage.py
 ```
 
 ### Example Interactions
