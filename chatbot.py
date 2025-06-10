@@ -461,7 +461,11 @@ async def process_chat(user_input: str) -> None:
 
     # 2. Prepare for assistant response
     current_workflow_steps = []
-    with st.chat_message("assistant"):
+    final_status_message = "Processing finished."  # Initialize with default value
+
+    # Create a placeholder for the assistant response that will be shown during processing
+    assistant_container = st.container()
+    with assistant_container, st.chat_message("assistant"):
         status_placeholder = st.status("Processing...", expanded=False)
         workflow_display_container = st.empty()
         message_placeholder = st.empty()
@@ -688,24 +692,17 @@ async def process_chat(user_input: str) -> None:
             render_workflow(current_workflow_steps, container=st)
 
         # --- Store results in session state ---
-        # Find the last user message added
-        last_user_message_index = -1
-        for i in range(len(st.session_state.messages) - 1, -1, -1):
-            if st.session_state.messages[i]["role"] == "user":
-                last_user_message_index = i
-                break
-
-        # Append assistant message right after the last user message
+        # Store the assistant response for the next rerun
         assistant_message = {
             "role": "assistant",
             "content": final_display_content or accumulated_response_content,  # Store clean or full
             "workflow_steps": [step.to_dict() for step in current_workflow_steps],
         }
-        if last_user_message_index != -1:
-            st.session_state.messages.insert(last_user_message_index + 1, assistant_message)
-        else:
-            # Should not happen if we added user message first, but as fallback
-            st.session_state.messages.append(assistant_message)
+        st.session_state.messages.append(assistant_message)
+
+        # Clear the temporary assistant container and rerun to show final state
+        assistant_container.empty()
+        st.rerun()
         # --- End storing results ---
 
     except Exception as e:
@@ -727,6 +724,9 @@ async def process_chat(user_input: str) -> None:
                 "workflow_steps": [step.to_dict() for step in current_workflow_steps],
             }
         )
+        # Clear the temporary assistant container and rerun to show final state
+        assistant_container.empty()
+        st.rerun()
     finally:
         # --- Final UI update ---
         if status_placeholder._label != f"✅ {final_status_message}" and status_placeholder._state != "error":
