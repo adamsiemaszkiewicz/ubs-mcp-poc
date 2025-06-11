@@ -418,6 +418,21 @@ class MCPClient:
         await self.cleanup()
 
     def __repr__(self) -> str:
-        """String representation for debugging."""
-        status = "initialized" if self._is_initialized else "not initialized"
-        return f"MCPClient(name='{self.name}', status='{status}', tools={len(self._available_tools)})"
+        """Return a string representation of the MCP client."""
+        return f"MCPClient(name={self.name}, initialized={self._is_initialized})"
+
+    def filter_tools(self, allowed_tool_names: set[str]) -> None:
+        """Filter available tools to only include those in the allowed set.
+        
+        Parameters
+        ----------
+        allowed_tool_names : set[str]
+            Set of tool names that should be available for this client
+        """
+        if not self._available_tools:
+            return
+            
+        self._available_tools = [
+            tool for tool in self._available_tools 
+            if tool.name in allowed_tool_names
+        ]

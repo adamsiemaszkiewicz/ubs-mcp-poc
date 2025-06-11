@@ -22,9 +22,9 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # --- Streamlit Page Configuration ---
-st.set_page_config(page_title="MCP Chatbot", layout="wide")
-st.title("⚙️ MCP Chatbot - Interactive Agent")
-st.caption("A chatbot that uses the Model Context Protocol (MCP) to interact with tools.")
+st.set_page_config(page_title="MCP Declarative Agent", layout="wide")
+st.title("🤖 MCP Declarative Agent")
+st.caption("Configure and chat with a Declarative Agent capable of using MCP tools.")
 
 # --- Session State Initialization ---
 if "messages" not in st.session_state:
@@ -38,6 +38,22 @@ if "chatbot_config" not in st.session_state:
 
 if "mcp_tools_cache" not in st.session_state:
     st.session_state.mcp_tools_cache = {}
+
+# Add state for declarative agent configuration
+if "agent_configured" not in st.session_state:
+    st.session_state.agent_configured = False
+if "agent_name" not in st.session_state:
+    st.session_state.agent_name = ""
+if "agent_model" not in st.session_state:
+    st.session_state.agent_model = ""
+if "agent_provider" not in st.session_state:
+    st.session_state.agent_provider = "openai"
+if "selected_tools" not in st.session_state:
+    st.session_state.selected_tools = set()  # Set of tool names
+if "agent_description" not in st.session_state:
+    st.session_state.agent_description = ""
+if "agent_system_prompt" not in st.session_state:
+    st.session_state.agent_system_prompt = ""
 
 # Add state for chat session and config tracking
 if "chat_session" not in st.session_state:
@@ -116,115 +132,6 @@ async def get_mcp_tools(force_refresh: bool = False) -> dict[str, list[MCPTool]]
 
     st.session_state.mcp_tools_cache = tools_dict
     return tools_dict
-
-
-def render_sidebar(mcp_tools: Optional[dict[str, list[MCPTool]]] = None) -> None:
-    """Render the sidebar with settings, MCP tools, and control buttons."""
-    with st.sidebar:
-        st.header("Settings")
-
-        # --- Clear Chat Button ---
-        if st.button("🧹 Clear Chat", use_container_width=True):
-            # Clear chat history
-            st.session_state.messages = []
-            # Reset chat session state variables
-            st.session_state.chat_session = None
-            st.session_state.session_config_hash = None
-            # Note: We don't explicitly close the AsyncExitStack here,
-            # as it's difficult to do reliably from a synchronous button click
-            # before rerun. The logic in process_chat handles cleanup when
-            # a *new* session is created due to config change or None state.
-            st.session_state.active_mcp_clients = []
-            st.session_state.mcp_client_stack = None
-            st.session_state.history_messages = []
-            st.toast("Chat cleared!", icon="🧹")
-            st.rerun()  # Rerun the app to reflect the cleared state
-
-        llm_tab, mcp_tab = st.tabs(["LLM", "MCP"])
-        with llm_tab:
-            # LLM provider selection using factory providers
-            available_providers = list(get_args(LLMProvider))  # Dynamically get from LLMProvider type
-            st.session_state.llm_provider = st.radio(
-                "LLM Provider:",
-                available_providers,
-                index=available_providers.index(st.session_state.llm_provider)
-                if st.session_state.llm_provider in available_providers
-                else 0,
-                key="llm_provider_radio",
-            )
-
-            config = st.session_state.chatbot_config
-            # Configuration based on provider
-            if st.session_state.llm_provider == "openai":
-                # OpenAI configuration
-                openai_models = ["gpt-4o", "gpt-4o-mini"]
-                config._llm_model_name = st.selectbox(
-                    "OpenAI Model:",
-                    options=openai_models,
-                    index=openai_models.index(config._llm_model_name)
-                    if config._llm_model_name in openai_models
-                    else 1,  # Default to gpt-4o-mini
-                    key="openai_model_name",
-                )
-            elif st.session_state.llm_provider == "anthropic":
-                # Anthropic configuration
-                st.info("ℹ️ Anthropic support is coming soon!")
-                anthropic_models = [
-                    "claude-4-sonnet",
-                    "claude-4-opus",
-                    "claude-3.7-sonnet",
-                ]
-                current_anthropic_model = getattr(config, "_anthropic_model_name", None) or anthropic_models[0]
-                config._anthropic_model_name = st.selectbox(
-                    "Anthropic Model:",
-                    options=anthropic_models,
-                    index=anthropic_models.index(current_anthropic_model)
-                    if current_anthropic_model in anthropic_models
-                    else 0,
-                    key="anthropic_model_name",
-                    disabled=True,
-                )
-            elif st.session_state.llm_provider == "google":
-                # Google configuration
-                st.info("ℹ️ Google support is coming soon!")
-                google_models = ["gemini-2.5-pro", "gemini-2.5-flash"]
-                current_google_model = getattr(config, "_google_model_name", None) or google_models[0]
-                config._google_model_name = st.selectbox(
-                    "Google Model:",
-                    options=google_models,
-                    index=google_models.index(current_google_model) if current_google_model in google_models else 0,
-                    key="google_model_name",
-                    disabled=True,
-                )
-
-        with mcp_tab:
-            if st.button("🔄 Refresh Tools", use_container_width=True, type="primary"):
-                st.session_state.mcp_tools_cache = {}
-                # Also reset the session as tool changes might affect capabilities
-                st.session_state.chat_session = None
-                st.session_state.session_config_hash = None
-                st.session_state.active_mcp_clients = []
-                st.session_state.mcp_client_stack = None
-                st.toast("Tools refreshed and session reset.", icon="🔄")
-                st.rerun()
-
-            if not mcp_tools:
-                st.info("No MCP tools loaded or configured.")
-
-            for client_name, client_tools in (mcp_tools or {}).items():
-                with st.expander(f"Client: {client_name} ({len(client_tools)} tools)"):
-                    if not client_tools:
-                        st.write("No tools found for this client.")
-                        continue
-                    total_tools = len(client_tools)
-                    for idx, tool in enumerate(client_tools):
-                        st.markdown(f"**Tool {idx + 1}: `{tool.name}`**")
-                        st.caption(f"{tool.description}")
-                        # Use tool name in key for popover uniqueness
-                        with st.popover("Schema"):
-                            st.json(tool.input_schema)
-                        if idx < total_tools - 1:
-                            st.divider()
 
 
 def extract_json_tool_calls(text: str) -> tuple[list[dict[str, Any]], str]:
@@ -405,6 +312,10 @@ def get_config_hash(config: Configuration, provider: str) -> int:
     """Generate a hash based on relevant configuration settings."""
     relevant_config = {
         "provider": provider,
+        "agent_configured": st.session_state.agent_configured,
+        "selected_tools": sorted(st.session_state.selected_tools) if st.session_state.agent_configured else None,
+        "agent_description": st.session_state.agent_description if st.session_state.agent_configured else None,
+        "agent_system_prompt": st.session_state.agent_system_prompt if st.session_state.agent_configured else None,
     }
     if provider == "openai":
         relevant_config.update(
@@ -428,8 +339,26 @@ def get_config_hash(config: Configuration, provider: str) -> int:
     return hash(json.dumps(relevant_config, sort_keys=True))
 
 
-async def initialize_mcp_clients(config: Configuration, stack: AsyncExitStack) -> list[MCPClient]:
-    """Initialize MCP Clients based on config."""
+async def initialize_mcp_clients(
+    config: Configuration, stack: AsyncExitStack, allowed_tools: Optional[set[str]] = None
+) -> list[MCPClient]:
+    """Initialize MCP Clients based on config.
+
+    Parameters
+    ----------
+    config : Configuration
+        The chatbot configuration
+    stack : AsyncExitStack
+        Async context manager stack for client lifecycle
+    allowed_tools : Optional[set[str]], optional
+        If provided, only tools with names in this set will be available
+
+    Returns
+    -------
+    list[MCPClient]
+        List of initialized MCP clients with optionally filtered tools
+
+    """
     clients = []
     server_config_path = ROOT_DIR / "servers_config.json"
     server_config = {}
@@ -445,6 +374,11 @@ async def initialize_mcp_clients(config: Configuration, stack: AsyncExitStack) -
                 client = MCPClient(name, srv_config)
                 # Enter the client's context into the provided stack
                 await stack.enter_async_context(client)
+
+                # Filter tools if allowed_tools is specified
+                if allowed_tools is not None:
+                    client.filter_tools(allowed_tools)
+
                 clients.append(client)
             except Exception as client_ex:
                 st.error(f"Failed to initialize MCP client {name}: {client_ex}")
@@ -452,7 +386,7 @@ async def initialize_mcp_clients(config: Configuration, stack: AsyncExitStack) -
 
 
 async def process_chat(user_input: str) -> None:
-    """Handles user input, interacts with the backend."""
+    """Handle user input, interacts with the backend."""
     # 1. Add user message to state and display it
     # Use a copy for history to avoid potential modification issues if session resets
     st.session_state.messages.append({"role": "user", "content": user_input})
@@ -510,14 +444,21 @@ async def process_chat(user_input: str) -> None:
             # Create and manage MCP Clients using
             # an AsyncExitStack stored in session state
             st.session_state.mcp_client_stack = AsyncExitStack()
-            mcp_clients = await initialize_mcp_clients(config, st.session_state.mcp_client_stack)
+            # Use selected tools if agent is configured, otherwise use all tools
+            allowed_tools = st.session_state.selected_tools if st.session_state.agent_configured else None
+            mcp_clients = await initialize_mcp_clients(config, st.session_state.mcp_client_stack, allowed_tools)
             st.session_state.active_mcp_clients = mcp_clients  # Store references
 
             # Create new ChatSession
             # Pass the *active* clients.
             # ChatSession needs to handle these potentially changing.
             # Assuming ChatSession uses the clients passed at creation time.
-            st.session_state.chat_session = ChatSession(st.session_state.active_mcp_clients, llm_client)
+            custom_prompt = (
+                st.session_state.agent_system_prompt
+                if st.session_state.agent_configured and st.session_state.agent_system_prompt.strip()
+                else None
+            )
+            st.session_state.chat_session = ChatSession(st.session_state.active_mcp_clients, llm_client, custom_prompt)
             await st.session_state.chat_session.initialize()
             # Keep the history messages from the new chat session.
             if not st.session_state.history_messages:
@@ -790,19 +731,233 @@ def display_chat_history() -> None:
             st.markdown(message["content"], unsafe_allow_html=True)
 
 
+def render_agent_configuration(mcp_tools: dict[str, list[MCPTool]]) -> bool:
+    """Render agent configuration screen and return True if agent is configured."""
+    st.header("🔧 Configure Your Declarative Agent")
+    st.write("Define your AI assistant by selecting a name, model, and tools.")
+
+    with st.container():
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("📋 Basic Configuration")
+
+            # Agent name
+            agent_name = st.text_input(
+                "Agent Name:",
+                value=st.session_state.agent_name,
+                placeholder="e.g., FileManager Assistant, Data Analyzer",
+                help="Give your agent a descriptive name",
+            )
+
+            # Agent description
+            agent_description = st.text_area(
+                "Agent Description:",
+                value=st.session_state.agent_description,
+                placeholder="e.g., A specialized assistant for managing files and folders, helping with data analysis and visualization tasks.",
+                help="Describe what your agent is designed to do",
+                height=80,
+            )
+
+            # Provider selection
+            available_providers = list(get_args(LLMProvider))
+            provider_index = 0
+            if st.session_state.agent_provider in available_providers:
+                provider_index = available_providers.index(st.session_state.agent_provider)
+
+            agent_provider = st.selectbox(
+                "LLM Provider:", options=available_providers, index=provider_index, help="Choose the AI model provider"
+            )
+
+            # Model selection based on provider
+            agent_model = ""
+            if agent_provider == "openai":
+                openai_models = ["gpt-4o", "gpt-4o-mini"]
+                model_index = 0
+                if st.session_state.agent_model in openai_models:
+                    model_index = openai_models.index(st.session_state.agent_model)
+                agent_model = st.selectbox("Model:", options=openai_models, index=model_index)
+            elif agent_provider == "anthropic":
+                st.info("ℹ️ Anthropic support is coming soon!")
+                anthropic_models = ["claude-4-sonnet", "claude-4-opus", "claude-3.7-sonnet"]
+                agent_model = st.selectbox("Model:", options=anthropic_models, index=0, disabled=True)
+            elif agent_provider == "google":
+                st.info("ℹ️ Google support is coming soon!")
+                google_models = ["gemini-2.5-pro", "gemini-2.5-flash"]
+                agent_model = st.selectbox("Model:", options=google_models, index=0, disabled=True)
+
+            # System prompt configuration
+            st.subheader("🎯 Custom System Prompt (Optional)")
+            agent_system_prompt = st.text_area(
+                "System Prompt:",
+                value=st.session_state.agent_system_prompt,
+                placeholder="You're a helpful assistant who speaks heavy British slang.",
+                help="Optional: Define how your agent should behave and respond. Tool usage instructions will be automatically appended.",
+                height=120,
+            )
+
+        with col2:
+            st.subheader("🛠️ Tool Selection")
+
+            if not mcp_tools:
+                st.warning("No MCP tools available. Please check your server configuration.")
+                st.button("🔄 Refresh Tools", on_click=lambda: st.session_state.update({"mcp_tools_cache": {}}))
+                return False
+
+            st.write("Select the tools your agent can use:")
+
+            # Display tools by client/server
+            selected_tools = set(st.session_state.selected_tools)
+
+            for client_name, client_tools in mcp_tools.items():
+                with st.expander(f"📦 {client_name} ({len(client_tools)} tools)", expanded=True):
+                    if not client_tools:
+                        st.write("No tools available in this server.")
+                        continue
+
+                    # Select all/none buttons for this client
+                    col_all, col_none = st.columns(2)
+                    with col_all:
+                        if st.button("Select All", key=f"select_all_{client_name}"):
+                            for tool in client_tools:
+                                selected_tools.add(tool.name)
+                    with col_none:
+                        if st.button("Select None", key=f"select_none_{client_name}"):
+                            for tool in client_tools:
+                                selected_tools.discard(tool.name)
+
+                    # Individual tool checkboxes
+                    for tool in client_tools:
+                        is_selected = st.checkbox(
+                            f"**{tool.name}**",
+                            value=tool.name in selected_tools,
+                            key=f"tool_{client_name}_{tool.name}",
+                            help=tool.description,
+                        )
+                        if is_selected:
+                            selected_tools.add(tool.name)
+                        else:
+                            selected_tools.discard(tool.name)
+
+    # Configuration summary
+    st.subheader("📊 Configuration Summary")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Agent Name", agent_name or "Not set")
+    with col2:
+        st.metric("Model", f"{agent_provider}/{agent_model}" if agent_model else "Not set")
+    with col3:
+        st.metric("Selected Tools", len(selected_tools))
+    with col4:
+        st.metric("Custom Prompt", "Yes" if agent_system_prompt.strip() else "Default")
+
+    # Action buttons
+    col1, col2, col3 = st.columns([1, 1, 1])
+
+    with col2:
+        can_configure = bool(agent_name.strip() and agent_model and selected_tools)
+
+        if st.button("✅ Configure Agent", type="primary", disabled=not can_configure, use_container_width=True):
+            # Save configuration
+            st.session_state.agent_name = agent_name.strip()
+            st.session_state.agent_description = agent_description.strip()
+            st.session_state.agent_system_prompt = agent_system_prompt.strip()
+            st.session_state.agent_provider = agent_provider
+            st.session_state.agent_model = agent_model
+            st.session_state.selected_tools = selected_tools
+            st.session_state.agent_configured = True
+
+            # Update the main configuration for consistency
+            st.session_state.llm_provider = agent_provider
+            if agent_provider == "openai":
+                st.session_state.chatbot_config._llm_model_name = agent_model
+
+            # Reset chat state to use new configuration
+            st.session_state.messages = []
+            st.session_state.chat_session = None
+            st.session_state.session_config_hash = None
+            st.session_state.active_mcp_clients = []
+            st.session_state.mcp_client_stack = None
+            st.session_state.history_messages = []
+
+            st.success(f"✅ Agent '{agent_name}' configured successfully!")
+            st.balloons()
+            st.rerun()
+
+    with col3:
+        if st.button("🔄 Reset Configuration", use_container_width=True):
+            st.session_state.agent_configured = False
+            st.session_state.agent_name = ""
+            st.session_state.agent_description = ""
+            st.session_state.agent_system_prompt = ""
+            st.session_state.agent_model = ""
+            st.session_state.agent_provider = "openai"
+            st.session_state.selected_tools = set()
+            st.rerun()
+
+    if not can_configure:
+        st.warning(
+            "⚠️ Please provide an agent name, select a model, and choose at least one tool to configure your agent."
+        )
+
+    return False
+
+
 async def main() -> None:
     """Main application entry point."""
-    # Get MCP tools (cached) - Tool list displayed in sidebar
+    # Get MCP tools (cached) - Tool list displayed in sidebar or configuration
     mcp_tools = await get_mcp_tools()
 
-    # Render sidebar - Allows config changes and clearing chat
-    render_sidebar(mcp_tools)
+    # Check if agent is configured
+    if not st.session_state.agent_configured:
+        # Show agent configuration screen
+        render_agent_configuration(mcp_tools)
+        return
+
+    # Show agent reconfiguration option in sidebar
+    with st.sidebar:
+        st.header("🤖 Current Declarative Agent")
+        st.write(f"**Name:** {st.session_state.agent_name}")
+        if st.session_state.agent_description:
+            st.write(f"**Description:** {st.session_state.agent_description}")
+        st.write(f"**Model:** {st.session_state.agent_provider}/{st.session_state.agent_model}")
+        # Show selected tools
+        with st.expander("🛠️ Selected Tools", expanded=False):
+            if st.session_state.selected_tools:
+                for tool_name in sorted(st.session_state.selected_tools):
+                    st.write(f"• {tool_name}")
+            else:
+                st.write("No tools selected")
+        if st.session_state.agent_system_prompt:
+            with st.expander("🎯 Custom System Prompt", expanded=False):
+                st.write(st.session_state.agent_system_prompt)
+
+        if st.button("🔧 Reconfigure Agent", use_container_width=True, type="primary"):
+            st.session_state.agent_configured = False
+            st.session_state.messages = []
+            st.session_state.chat_session = None
+            st.session_state.session_config_hash = None
+            st.session_state.active_mcp_clients = []
+            st.session_state.mcp_client_stack = None
+            st.session_state.history_messages = []
+            st.rerun()
+
+        # Clear chat button
+        if st.button("🧹 Clear Chat", use_container_width=True):
+            st.session_state.messages = []
+            st.session_state.chat_session = None
+            st.session_state.session_config_hash = None
+            st.session_state.active_mcp_clients = []
+            st.session_state.mcp_client_stack = None
+            st.session_state.history_messages = []
+            st.toast("Chat cleared!", icon="🧹")
+            st.rerun()
 
     # Display existing chat messages and their workflows from session state
     display_chat_history()
 
     # Handle new chat input
-    if prompt := st.chat_input("Ask something... (e.g., 'What files are in the root directory?')"):
+    if prompt := st.chat_input(f"Ask {st.session_state.agent_name} something..."):
         await process_chat(prompt)
 
 

@@ -13,10 +13,12 @@ from src.workflow import WorkflowEventType, WorkflowTracer
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# System message template for LLM with tool integration
-# Following MCP best practices for tool invocation
-SYSTEM_MESSAGE = (
-    "You are a helpful assistant with access to these tools:\n\n"
+# Default system message for LLM personality
+DEFAULT_SYSTEM_PROMPT = "You're a helpful assistant."
+
+# Tool usage instructions template that gets appended to any system prompt
+TOOL_INSTRUCTIONS = (
+    "\n\nYou have access to these tools:\n\n"
     "{tools_description}\n\n"
     "IMPORTANT INSTRUCTIONS FOR TOOL USAGE:\n\n"
     "1. When you need to use a tool to answer a user's question, respond with ONLY the JSON object below (no additional text):\n"
@@ -38,6 +40,9 @@ SYSTEM_MESSAGE = (
     "- Do not repeat the raw technical data\n\n"
     "Remember: Either respond with ONLY a JSON tool call, OR respond with ONLY conversational text. Never mix both in the same response."
 )
+
+# Legacy system message template for backward compatibility
+SYSTEM_MESSAGE = DEFAULT_SYSTEM_PROMPT + TOOL_INSTRUCTIONS
 
 
 @dataclass
@@ -120,12 +125,15 @@ class ChatSession:
     5. LLM generates natural language response based on tool results
     """
 
-    def __init__(self, clients: List[MCPClient], llm_client: OpenAIClient) -> None:
+    def __init__(
+        self, clients: List[MCPClient], llm_client: OpenAIClient, custom_system_prompt: Optional[str] = None
+    ) -> None:
         """Initialize ChatSession with MCP clients and LLM client.
 
         Args:
             clients: List of initialized MCP clients, each connected to a different server
             llm_client: LLM client for generating responses and tool calls
+            custom_system_prompt: Optional custom system prompt to override the default
 
         Note:
             Following MCP architecture best practices:
@@ -136,6 +144,7 @@ class ChatSession:
         """
         self.clients: List[MCPClient] = clients
         self.llm_client: OpenAIClient = llm_client
+        self.custom_system_prompt: Optional[str] = custom_system_prompt
         self.messages: List[Dict[str, str]] = []
         self._is_initialized: bool = False
 
@@ -244,6 +253,7 @@ class ChatSession:
         """Create system message with consolidated tool descriptions.
 
         Builds a comprehensive system prompt that includes:
+        - Custom system prompt (if provided) or default personality
         - Descriptions of all available tools from all servers
         - Instructions for tool invocation format
         - Guidelines for natural language response generation
@@ -259,11 +269,24 @@ class ChatSession:
 
         # Format tool descriptions for LLM understanding
         tools_description = "\n".join([tool.format_for_llm() for tool in all_tools])
-        system_message = SYSTEM_MESSAGE.format(tools_description=tools_description)
+
+        # Combine custom prompt (or default) with tool instructions
+        base_prompt = self.custom_system_prompt if self.custom_system_prompt else DEFAULT_SYSTEM_PROMPT
+
+        # Always append tool instructions if there are tools available
+        if all_tools:
+            system_message = base_prompt + TOOL_INSTRUCTIONS.format(tools_description=tools_description)
+        else:
+            # No tools available, just use the base prompt
+            system_message = base_prompt
 
         # Initialize conversation with system message
         self.messages = [{"role": "system", "content": system_message}]
-        logging.info(f"System message created with {len(all_tools)} tools from {len(self.clients)} servers")
+
+        prompt_type = "custom" if self.custom_system_prompt else "default"
+        logging.info(
+            f"System message created with {prompt_type} prompt and {len(all_tools)} tools from {len(self.clients)} servers"
+        )
 
     def _extract_tool_calls(self, llm_response: str) -> List[Dict[str, Any]]:
         """Extract tool call JSON objects from LLM response.
