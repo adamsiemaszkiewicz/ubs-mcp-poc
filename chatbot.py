@@ -22,7 +22,7 @@ initialize_session_state()
 
 
 async def main() -> None:
-    """Run Declarative Agentchatbot."""
+    """Run Declarative Agent chatbot."""
     # Get MCP tools (cached) - Tool list displayed in sidebar or configuration
     mcp_tools = await get_mcp_tools()
 
