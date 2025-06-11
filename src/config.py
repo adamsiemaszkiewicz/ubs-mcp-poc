@@ -12,8 +12,7 @@ class Configuration:
         """Initialize configuration with environment variables."""
         self.load_env()
         self._llm_api_key = os.getenv("LLM_API_KEY")
-        self._llm_base_url = os.getenv("LLM_BASE_URL")
-        self._llm_model_name = os.getenv("LLM_MODEL_NAME")
+        self._llm_model_name = None  # Model name set via UI only
 
     @staticmethod
     def load_env() -> None:
@@ -76,9 +75,9 @@ class Configuration:
         Raises
         ------
         ValueError
-            If the model name is not found in environment variables.
+            If the model name is not configured through the UI agent configuration.
 
         """
         if not self._llm_model_name:
-            raise ValueError("LLM_MODEL_NAME not found in environment variables")
+            raise ValueError("Model name not configured. Please configure your agent through the UI.")
         return self._llm_model_name
