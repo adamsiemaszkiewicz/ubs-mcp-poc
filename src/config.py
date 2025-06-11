@@ -12,7 +12,7 @@ class Configuration:
         """Initialize configuration with environment variables."""
         self.load_env()
         self._llm_api_key = os.getenv("LLM_API_KEY")
-        self._llm_model_name = None  # Model name set via UI only
+        self._llm_model_name = None
 
     @staticmethod
     def load_env() -> None:
