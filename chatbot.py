@@ -828,16 +828,22 @@ def render_agent_configuration(mcp_tools: dict[str, list[MCPTool]]) -> bool:
 
                     # Individual tool checkboxes
                     for tool in client_tools:
-                        is_selected = st.checkbox(
-                            f"**{tool.name}**",
-                            value=tool.name in selected_tools,
-                            key=f"tool_{client_name}_{tool.name}",
-                            help=tool.description,
-                        )
-                        if is_selected:
-                            selected_tools.add(tool.name)
-                        else:
-                            selected_tools.discard(tool.name)
+                        col_checkbox, col_schema = st.columns([3, 1])
+
+                        with col_checkbox:
+                            is_selected = st.checkbox(
+                                f"**{tool.name}**",
+                                value=tool.name in selected_tools,
+                                key=f"tool_{client_name}_{tool.name}",
+                                help=tool.description,
+                            )
+                            if is_selected:
+                                selected_tools.add(tool.name)
+                            else:
+                                selected_tools.discard(tool.name)
+
+                        with col_schema, st.popover("Schema", use_container_width=True):
+                            st.json(tool.input_schema)
 
     # Configuration summary
     st.subheader("📊 Configuration Summary")
