@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 
-async def run_server(name: str, script_path: str, port: int) -> subprocess.Popen:
+async def run_server(name: str, script_path: str, port: int) -> subprocess.Popen | None:
     """Run a single MCP server."""
     print(f"Starting {name} on port {port}...")
 
