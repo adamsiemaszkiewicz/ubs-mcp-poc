@@ -24,25 +24,52 @@ flowchart LR
         H --> C3
     end
 
-    subgraph "Local Machine"
-        S1[Markdown Server]
-        S2[DateTime Server]
-        R1[("Local Files")]
-        R2[("System Data")]
+    subgraph "HTTP MCP Servers"
+        S1[markdown_processor<br/>:8000/mcp]
+        S2[datetime_processor<br/>:8001/mcp]
+        R1[("Markdown Files")]
+        R2[("System Clock")]
         
-        C1 --> S1
-        C2 --> S2
+        C1 -.HTTP.-> S1
+        C2 -.HTTP.-> S2
         S1 <--> R1
         S2 <--> R2
     end
 
-    subgraph "External"
-        S3[Filesystem Server]
-        R3[("File System")]
+    subgraph "External NPM Servers"
+        S3[filesystem server<br/>@modelcontextprotocol]
+        R3[("Downloads Directory")]
         
-        C3 --> S3
+        C3 -.STDIO.-> S3
         S3 <--> R3
     end
+```
+
+## 🚀 Quick Start
+
+### 1. Environment Setup
+```bash
+# Create and activate conda environment
+conda env create -f environment.yml
+conda activate ubs-mcp-poc
+```
+
+### 2. Configuration
+```bash
+# Set up required environment variable in your .env file
+LLM_API_KEY=your_azure_openai_api_key_here
+
+# The servers_config.json is already configured for HTTP transport
+# Model selection is REQUIRED through the UI agent configuration - no environment variables
+```
+
+### 3. Run the Application
+```bash
+# Start HTTP MCP servers first
+python run_http_servers.py
+
+# In a new terminal, run the chatbot
+streamlit run chatbot.py
 ```
 
 ## 🏗️ Architecture
@@ -51,15 +78,36 @@ flowchart LR
 
 This project implements the complete MCP architecture with the following key components:
 
-#### 1. **Host Application** (`chatbot.py`)
-The main Streamlit application that acts as the MCP host:
-- **Role**: Coordinates MCP client and manages the overall UX/UI
+#### 1. **Host Application Layer**
+The complete user interface and application orchestration layer:
+
+**Main Entry Point** (`chatbot.py`):
+- **Role**: Lightweight coordinator and entry point (54 lines)
 - **Responsibilities**: 
-  - User interface and chat management
-  - LLM integration and response streaming
-  - Client lifecycle management
-  - Security and authorization control
-  - Context aggregation across multiple servers
+  - Application initialization and configuration
+  - Session state management delegation
+  - Component orchestration
+  - Main event loop coordination
+
+**UI Components** (`src/ui/`):
+- **Components** (`components.py`): Interactive Streamlit components (381 lines)
+  - Chat display and history management
+  - Agent configuration interface
+  - Sidebar controls and tool visualization
+  - Workflow progress display
+- **Manager** (`manager.py`): Session state initialization and management (94 lines)
+  - Streamlit session state setup
+  - Application state persistence
+  - Configuration management
+
+**Chat Processing** (`src/chat/processor.py`):
+- **Core Function**: Processes user messages and orchestrates agent responses (485 lines)
+- **Key Features**:
+  - Agent configuration and personality management
+  - Streaming response generation with workflow visualization
+  - Tool execution integration via ChatSession
+  - Real-time UI updates and progress tracking
+  - Error handling and user feedback
 
 #### 2. **MCP Client Layer** (`src/mcp/client.py`)
 
@@ -75,15 +123,24 @@ sequenceDiagram
     participant Client as MCPClient
     participant Server as MCP Server
     
-    App->>Client: Initialize connection
-    Client->>Server: STDIO/HTTP connection + handshake
-    Server-->>Client: Capabilities + available tools
-    Client-->>App: Ready with tool list
+    App->>Client: initialize()
     
-    App->>Client: Execute tool("read_file", {path: "..."})
-    Client->>Server: MCP tools/call message
-    Server-->>Client: Tool result
-    Client-->>App: Formatted result
+    alt HTTP Transport
+        Client->>Server: HTTP connect to url/mcp
+    else STDIO Transport
+        Client->>Server: Start subprocess with command + args
+    end
+    
+    Client->>Server: MCP handshake (initialize)
+    Server-->>Client: Protocol version + capabilities
+    Client->>Server: tools/list request
+    Server-->>Client: Available tools with schemas
+    Client-->>App: Ready with discovered tools
+    
+    App->>Client: execute_tool("read_file", {path: "..."})
+    Client->>Server: tools/call with retry logic
+    Server-->>Client: Tool execution result
+    Client-->>App: Processed result
 ```
 
 ##### **💡 Core Implementation Logic**
@@ -209,19 +266,19 @@ async def handle_user_request():
     # Setup: Multiple servers for different capabilities (auto-transport detection)
     config = {
         "filesystem": {"command": "npx", "args": ["@modelcontextprotocol/server-filesystem"]},
-        "datetime": {"url": "http://127.0.0.1:8001/mcp", "timeout": 30},  # HTTP server
-        "markdown": {"command": "python", "args": ["src/servers/markdown.py"]},  # STDIO server
+        "datetime_processor": {"url": "http://127.0.0.1:8001/mcp", "timeout": 30},  # HTTP server
+        "markdown_processor": {"url": "http://127.0.0.1:8000/mcp", "timeout": 30},  # HTTP server
     }
     
     # Create clients (one per server) - auto-detects transport type
-    fs_client = MCPClient("filesystem", config["filesystem"])  # STDIO
-    dt_client = MCPClient("datetime", config["datetime"])      # HTTP
-    md_client = MCPClient("markdown", config["markdown"])      # STDIO
+    fs_client = MCPClient("filesystem", config["filesystem"])                    # STDIO
+    dt_client = MCPClient("datetime_processor", config["datetime_processor"])    # HTTP
+    md_client = MCPClient("markdown_processor", config["markdown_processor"])    # HTTP
     
     # Initialize connections (transport handled automatically)
     await fs_client.initialize()  # ← Starts filesystem server via STDIO
-    await dt_client.initialize()  # ← Connects to HTTP datetime server
-    await md_client.initialize()  # ← Starts markdown server via STDIO
+    await dt_client.initialize()  # ← Connects to HTTP datetime_processor server
+    await md_client.initialize()  # ← Connects to HTTP markdown_processor server
     
     # Now we have access to all tools from all servers
     fs_tools = await fs_client.list_tools()    # ["read_file", "write_file", "list_dir"]
@@ -241,7 +298,7 @@ async def handle_user_request():
 - ✅ **Reliability**: If one server fails, others keep working
 - ✅ **Scalability**: Easy to add new capabilities by adding new servers
 
-#### 3. **Chat Session Orchestrator** (`src/mcp/session.py`)
+#### 2. **Chat Session Orchestrator** (`src/mcp/session.py`)
 The intelligent session manager that coordinates between users, LLMs, and tools:
 - **Core Function**: Orchestrates multi-turn conversations with dynamic tool integration
 - **Key Features**:
@@ -250,6 +307,15 @@ The intelligent session manager that coordinates between users, LLMs, and tools:
   - Response streaming with real-time workflow visualization
   - Error handling and retry mechanisms
   - Message history management
+
+#### 3. **MCP Tools Manager** (`src/mcp/manager.py`)
+Caching and management layer for MCP tools across servers:
+- **Core Function**: Efficient tool discovery and caching for Streamlit sessions
+- **Features**:
+  - Automatic transport type detection (HTTP/STDIO)
+  - Tools caching for performance
+  - Error handling and configuration validation
+  - Session state integration
 
 #### 4. **LLM Integration Layer** (`src/model/`)
 Pluggable LLM client architecture supporting multiple providers:
@@ -272,8 +338,15 @@ sequenceDiagram
     participant Server as MCP Server Process
     
     Host->>Client: Need to call tool "read_file"
-    Client->>Server: Start process (python server.py)
-    Server-->>Client: MCP handshake + capabilities
+    
+    alt HTTP Transport
+        Client->>Server: HTTP Connection to server_url/mcp
+        Server-->>Client: MCP handshake + capabilities (HTTP)
+    else STDIO Transport  
+        Client->>Server: Start process (command + args)
+        Server-->>Client: MCP handshake + capabilities (STDIO)
+    end
+    
     Client->>Server: tools/list request
     Server-->>Client: Available tools ["read_file", "write_file"]
     Client->>Server: tools/call "read_file" {path: "data.txt"}
@@ -317,29 +390,41 @@ def code_summary_prompt(code: str):
 
 **Step 1: Basic Server Structure**
 ```python
-# my_server.py
+# my_server.py - Following our actual server pattern
 from mcp.server.fastmcp import FastMCP
 
-# Initialize server
-server = FastMCP("my-calculator")
+# Initialize server with HTTP transport (as used in our servers)
+mcp = FastMCP("my-calculator", port=8002)
 
-@server.tool()
+@mcp.tool()
 def add_numbers(a: float, b: float) -> float:
     """Add two numbers together"""
     return a + b
 
-@server.tool() 
+@mcp.tool() 
 def get_time() -> str:
     """Get current time"""
     from datetime import datetime
     return datetime.now().isoformat()
 
-# Run server
+# Run server with HTTP transport (like our actual servers)
 if __name__ == "__main__":
-    server.run()  # Starts STDIO communication
+    mcp.run(transport="streamable-http")  # HTTP transport on specified port
 ```
 
 **Step 2: Add to Configuration**
+```json
+{
+    "mcpServers": {
+        "calculator": {
+            "url": "http://127.0.0.1:8002/mcp",
+            "timeout": 30
+        }
+    }
+}
+```
+
+**Alternative: STDIO Configuration (if you modify the server to use STDIO)**
 ```json
 {
     "mcpServers": {
@@ -351,53 +436,6 @@ if __name__ == "__main__":
 }
 ```
 
-**Step 3: Server Automatically Available**
-```python
-# Host application automatically discovers tools:
-# - add_numbers(a, b) 
-# - get_time()
-# 
-# LLM can now use these tools in conversations
-```
-
-##### **🛠️ Server Development Patterns**
-
-**Error Handling Best Practice**
-```python
-@server.tool()
-def safe_file_read(filename: str) -> dict:
-    """Read file with error handling"""
-    try:
-        # Validate input
-        if not filename.endswith('.txt'):
-            return {"error": "Only .txt files allowed"}
-        
-        # Perform operation  
-        with open(filename, 'r') as f:
-            content = f.read()
-        
-        return {"success": True, "content": content}
-        
-    except FileNotFoundError:
-        return {"error": f"File {filename} not found"}
-    except Exception as e:
-        return {"error": f"Unexpected error: {str(e)}"}
-```
-
-**Async Operations**
-```python
-@server.tool()
-async def fetch_data(url: str) -> dict:
-    """Fetch data from external API"""
-    import httpx
-    
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, timeout=10.0)
-            return {"data": response.json(), "status": response.status_code}
-        except Exception as e:
-            return {"error": str(e)}
-```
 
 ##### **🔄 Server Lifecycle in Host**
 
@@ -430,19 +468,25 @@ async def initialize_mcp_ecosystem():
     return servers  # Ready for LLM to use!
 ```
 
-**Tool Routing**
+**Tool Routing** (From `src/mcp/session.py`)
 ```python
-# When LLM wants to call a tool:
-async def execute_tool(tool_name: str, arguments: dict):
-    # 1. Find which server has this tool
-    for server_name, server_info in servers.items():
-        if tool_name in [t.name for t in server_info["tools"]]:
-            # 2. Route to correct server
-            client = server_info["client"]
-            result = await client.execute_tool(tool_name, arguments)
-            return result
+# When LLM wants to call a tool (actual implementation):
+async def _execute_tool_call(self, tool_call_data: Dict[str, Any]) -> ToolCall:
+    tool_name = tool_call_data["name"]
+    arguments = tool_call_data["arguments"]
     
-    raise ValueError(f"Tool {tool_name} not found")
+    # 1. Find which client has this tool (from tool_routing_map)
+    if tool_name not in self.tool_routing_map:
+        raise ValueError(f"Tool '{tool_name}' not available")
+    
+    client = self.tool_routing_map[tool_name]
+    
+    # 2. Execute with retry and error handling
+    try:
+        result = await client.execute_tool(tool_name, arguments)
+        return ToolCall(tool=tool_name, arguments=arguments, result=result)
+    except Exception as e:
+        return ToolCall(tool=tool_name, arguments=arguments, error=str(e))
 ```
 
 **Why This Architecture?**
@@ -531,10 +575,16 @@ ubs-mcp-poc/
 │   ├── mcp/                  # MCP implementation
 │   │   ├── client.py         # MCP client implementation
 │   │   ├── session.py        # Chat session orchestrator
+│   │   ├── manager.py        # MCP tools caching and management
 │   │   ├── tool.py          # Tool abstraction layer
 │   │   └── servers/         # Custom MCP servers
-│   │       ├── markdown_processor.py
-│   │       └── datetime_processor.py
+│   │       ├── markdown_processor.py  # FastMCP markdown server
+│   │       └── datetime_processor.py  # FastMCP datetime server
+│   ├── chat/                # Chat processing layer
+│   │   └── processor.py     # Core chat processing logic (485 lines)
+│   ├── ui/                  # User interface components
+│   │   ├── components.py    # Streamlit UI components
+│   │   └── manager.py       # Session state management
 │   ├── model/               # LLM integration layer
 │   │   ├── factory.py       # Provider factory
 │   │   ├── base.py         # Base LLM interface
@@ -580,15 +630,7 @@ The configuration supports both STDIO and HTTP transports with automatic detecti
 - `headers`: Optional HTTP headers for authentication
 - `timeout`: Request timeout in seconds (default: 30)
 
-### Environment Setup
-```bash
-# Create conda environment
-conda env create -f environment.yml
-conda activate ubs-mcp-poc
 
-# Install additional dependencies
-pip install mcp[cli] openai-agents python-dotenv streamlit
-```
 
 ## 🎯 Usage
 
@@ -605,7 +647,9 @@ pip install mcp[cli] openai-agents python-dotenv streamlit
    streamlit run chatbot.py
    ```
 
-### Option 2: STDIO Transport (Good for Development)
+### Option 2: STDIO Transport (Alternative for Development)
+
+**Note:** Our custom servers are designed for HTTP transport. To use STDIO, you'd need to modify them to remove the `transport="streamable-http"` parameter.
 
 1. **Update Configuration:** Change `servers_config.json` to use STDIO:
    ```json
@@ -614,12 +658,18 @@ pip install mcp[cli] openai-agents python-dotenv streamlit
            "markdown_processor": {
                "command": "python",
                "args": ["src/mcp/servers/markdown_processor.py"]
+           },
+           "datetime_processor": {
+               "command": "python",
+               "args": ["src/mcp/servers/datetime_processor.py"]
            }
        }
    }
    ```
 
-2. **Run the Chatbot:**
+2. **Modify servers** to remove HTTP transport (change `mcp.run(transport="streamable-http")` to `mcp.run()`)
+
+3. **Run the Chatbot:**
    ```bash
    streamlit run chatbot.py
    ```
@@ -630,29 +680,17 @@ pip install mcp[cli] openai-agents python-dotenv streamlit
 python example_http_usage.py
 ```
 
-### Example Interactions
-
-1. **File Operations**
-   - "What files are in the root directory?"
-   - "Create a new markdown file with project documentation"
-
-2. **Data Processing** 
-   - "Process this markdown content and extract headers"
-   - "Convert this text to a structured format"
-
-3. **Time-Based Operations**
-   - "What's the current time in UTC?"
-   - "Schedule a reminder for next week"
-
 ### Tool Call Flow
 
 The system automatically detects when tools are needed and executes them transparently:
 
-1. **User Input**: Natural language query
-2. **LLM Processing**: Determines if tools are needed
-3. **Tool Discovery**: Finds relevant tools across all connected servers
-4. **Execution**: Calls appropriate tools with extracted parameters
-5. **Response Generation**: Processes results into natural language
+1. **User Input**: Natural language query in Streamlit chat interface
+2. **Chat Processing**: `src/chat/processor.py` handles the message and agent interaction
+3. **LLM Processing**: Determines if tools are needed via `ChatSession`
+4. **Tool Discovery**: `MCPManager` provides cached tools from all connected servers
+5. **Tool Routing**: `ChatSession` routes calls to appropriate MCP clients
+6. **Execution**: MCP clients execute tools on their respective servers
+7. **Response Generation**: Results processed and streamed back to UI with workflow visualization
 
 ## 🔧 How MCP Works in This Implementation
 
@@ -662,10 +700,16 @@ Following the [MCP lifecycle specification](mcp-docs/sections/lifecycle.md):
 
 1. **Initialization Phase**
    ```python
-   # Host creates clients for each configured server
-   for name, config in server_configs.items():
-       client = MCPClient(name, config)
-       await client.initialize()  # Establishes connection
+   # MCP Manager loads and caches tools from all configured servers
+   # Located in src/mcp/manager.py
+   async def get_mcp_tools():
+       tools_dict = {}
+       for name, srv_config in server_config["mcpServers"].items():
+           client = MCPClient(name, srv_config)
+           await client.initialize()  # Auto-detects HTTP/STDIO transport
+           tools = await client.list_tools()
+           tools_dict[name] = {"tools": tools, "transport": transport_type, "config": srv_config}
+       return tools_dict
    ```
 
 2. **Capability Exchange**
@@ -694,20 +738,25 @@ Our implementation follows the standard [MCP message patterns](mcp-docs/sections
 ```mermaid
 sequenceDiagram
     participant User
+    participant UI as Streamlit UI
     participant ChatSession
     participant MCPClient
     participant MCPServer
 
-    User->>ChatSession: "What files are available?"
-    ChatSession->>MCPClient: list_tools()
-    MCPClient->>MCPServer: tools/list
-    MCPServer-->>MCPClient: Available tools
-    MCPClient-->>ChatSession: Tool metadata
-    ChatSession->>MCPClient: call_tool("list_files", {})
-    MCPClient->>MCPServer: tools/call
-    MCPServer-->>MCPClient: File listing
-    MCPClient-->>ChatSession: Results
-    ChatSession-->>User: "Here are the available files..."
+    User->>UI: "What files are available?"
+    UI->>ChatSession: send_message_stream()
+    ChatSession->>ChatSession: Initialize workflow tracer
+    ChatSession->>ChatSession: LLM processing (extract tool calls)
+    
+    ChatSession->>MCPClient: execute_tool("list_directory", {})
+    MCPClient->>MCPServer: tools/call request
+    MCPServer-->>MCPClient: Directory listing result
+    MCPClient-->>ChatSession: Tool execution result
+    
+    ChatSession->>ChatSession: Format tool results for LLM
+    ChatSession->>ChatSession: Generate final response
+    ChatSession-->>UI: Stream response chunks
+    UI-->>User: "Here are the available files..."
 ```
 
 ## 🔐 Security Considerations
